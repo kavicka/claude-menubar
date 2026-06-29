@@ -17,6 +17,15 @@ enum EntryPoint {
             }
             return
         }
+        // --open <sessionId>: exercise the exact click code path headlessly.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--open"), i + 1 < args.count {
+            let sid = args[i + 1]
+            DeepLink.open(Session(id: sid, pid: nil, cwd: "", state: .running,
+                                  title: "", lastActivity: Date(), entrypoint: nil))
+            print("fired deep link for \(sid)")
+            return
+        }
         ClaudeMenuBarApp.main()
     }
 }

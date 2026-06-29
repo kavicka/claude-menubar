@@ -12,14 +12,17 @@ struct MenuContentView: View {
 
             Divider()
 
-            if store.sessions.isEmpty {
-                Text("No active chats")
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 18)
-            } else {
-                ScrollView {
+            // Fixed-height scroll area: the window must NOT resize when a chat is
+            // hidden, otherwise MenuBarExtra (.window) re-anchors and can jump
+            // off-screen. Rows scroll inside this constant frame instead.
+            ScrollView {
+                if store.sessions.isEmpty {
+                    Text("No active chats")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 44)
+                } else {
                     VStack(spacing: 2) {
                         ForEach(store.sessions) { session in
                             row(session)
@@ -27,8 +30,8 @@ struct MenuContentView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .frame(maxHeight: 360)
             }
+            .frame(height: 340)
 
             Divider()
             footer
