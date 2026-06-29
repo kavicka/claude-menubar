@@ -1,0 +1,4 @@
+.build/
+ClaudeMenuBar.app/
+*.xcodeproj
+.DS_Store

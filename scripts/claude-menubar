@@ -1,0 +1,181 @@
+#!/bin/bash
+# claude-menubar — control CLI for the ClaudeMenuBar app.
+#
+#   claude-menubar setup     wire status hooks + autostart (LaunchAgent), then start
+#   claude-menubar remove    undo setup (hooks + LaunchAgent); keeps the app
+#   claude-menubar start|stop|restart|status
+#   claude-menubar doctor    show what's installed and where
+#
+# The app itself is installed by Homebrew (or ./install.sh). This CLI only manages
+# the local integration with your Claude Code config under ~/.claude.
+set -euo pipefail
+
+LABEL="com.adamkrampl.claudemenubar"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+MB="$HOME/.claude/menubar"
+STATUS_DIR="$MB/status"
+HOOK="$MB/claude-menubar-hook.sh"
+SETTINGS="$HOME/.claude/settings.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- locate the app bundle across brew (both arches) / /Applications / dev tree ---
+find_app() {
+  local brew_opt=""
+  command -v brew >/dev/null 2>&1 && brew_opt="$(brew --prefix 2>/dev/null)/opt/claude-menubar/ClaudeMenuBar.app"
+  local c
+  for c in "${CLAUDE_MENUBAR_APP:-}" \
+           "$brew_opt" \
+           "/opt/homebrew/opt/claude-menubar/ClaudeMenuBar.app" \
+           "/usr/local/opt/claude-menubar/ClaudeMenuBar.app" \
+           "/Applications/ClaudeMenuBar.app" \
+           "$SCRIPT_DIR/../ClaudeMenuBar.app"; do
+    [ -n "$c" ] && [ -d "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+app_exe() {
+  local app; app="$(find_app)" || { echo "ERROR: ClaudeMenuBar.app not found. Install it first (brew install kavicka/claude-menubar/claude-menubar)." >&2; exit 1; }
+  echo "$app/Contents/MacOS/ClaudeMenuBar"
+}
+
+write_hook() {
+  mkdir -p "$STATUS_DIR"
+  cat > "$HOOK" <<'EOS'
+#!/bin/bash
+# Claude Code menu bar status hook. Writes a tiny per-session status file.
+# Invoked with the state as $1 (running|waiting|finished). Hook JSON on stdin.
+state="${1:-running}"
+dir="$HOME/.claude/menubar/status"
+mkdir -p "$dir"
+input="$(cat)"
+sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+[ -z "$sid" ] && exit 0
+ts="$(date +%s)"
+out="$dir/$sid.json"; tmp="$out.tmp.$$"
+jq -nc --arg sid "$sid" --arg state "$state" --arg cwd "$cwd" --argjson ts "$ts" \
+  '{sessionId:$sid, state:$state, cwd:$cwd, ts:$ts}' > "$tmp" 2>/dev/null && mv -f "$tmp" "$out"
+exit 0
+EOS
+  chmod +x "$HOOK"
+}
+
+merge_settings() {
+  [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  if grep -q "claude-menubar-hook.sh" "$SETTINGS"; then
+    echo "    hooks already in settings.json — skipping"
+    return
+  fi
+  command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (brew install jq)." >&2; exit 1; }
+  cp "$SETTINGS" "$SETTINGS.menubar-bak.$(date +%s)"
+  local tmp; tmp="$(mktemp)"
+  jq --arg sh "$HOOK" '
+    .hooks //= {}
+    | .hooks.SessionStart     = ((.hooks.SessionStart     // []) + [{hooks:[{type:"command",command:($sh+" waiting")}]}])
+    | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) + [{hooks:[{type:"command",command:($sh+" running")}]}])
+    | .hooks.Stop             = ((.hooks.Stop             // []) + [{hooks:[{type:"command",command:($sh+" waiting")}]}])
+    | .hooks.Notification     = ((.hooks.Notification     // []) + [{hooks:[{type:"command",command:($sh+" waiting")}]}])
+    | .hooks.SessionEnd       = ((.hooks.SessionEnd       // []) + [{hooks:[{type:"command",command:($sh+" finished")}]}])
+  ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  echo "    merged hooks into settings.json (backup saved alongside)"
+}
+
+unmerge_settings() {
+  [ -f "$SETTINGS" ] || return 0
+  grep -q "claude-menubar-hook.sh" "$SETTINGS" || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  cp "$SETTINGS" "$SETTINGS.menubar-bak.$(date +%s)"
+  local tmp; tmp="$(mktemp)"
+  jq '
+    if .hooks then
+      .hooks |= with_entries(
+        .value |= map(select(((.hooks // []) | map(.command) | join(" ")) | test("claude-menubar-hook.sh") | not))
+      )
+      | .hooks |= with_entries(select((.value | length) > 0))
+    else . end
+  ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  echo "    removed hooks from settings.json (backup saved alongside)"
+}
+
+write_plist() {
+  local exe; exe="$(app_exe)"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>              <string>$LABEL</string>
+    <key>ProgramArguments</key>   <array><string>$exe</string></array>
+    <key>RunAtLoad</key>          <true/>
+    <key>KeepAlive</key>          <false/>
+    <key>ProcessType</key>        <string>Interactive</string>
+    <key>LimitLoadToSessionType</key> <string>Aqua</string>
+</dict>
+</plist>
+PL
+}
+
+lc_start()   { launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl kickstart "gui/$(id -u)/$LABEL" 2>/dev/null || true; }
+lc_stop()    { pkill -f "ClaudeMenuBar.app/Contents/MacOS/ClaudeMenuBar" 2>/dev/null || true; launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true; }
+
+cmd_setup() {
+  echo "==> ClaudeMenuBar setup"
+  echo "  app: $(find_app || echo '??')"
+  write_hook
+  echo "  hook installed: $HOOK"
+  merge_settings
+  write_plist
+  lc_stop; lc_start
+  echo "  autostart registered (LaunchAgent $LABEL)"
+  echo ""
+  echo "Done. Look for 🟠🟡🟢 counts in your menu bar."
+  echo "Note: clicking a chat opens it via the claude://resume deep link; if that"
+  echo "does nothing on your setup, use the row's right-click → Open in Terminal."
+}
+
+cmd_remove() {
+  echo "==> Removing integration (app stays; 'brew uninstall claude-menubar' to remove it)"
+  lc_stop
+  rm -f "$PLIST"
+  unmerge_settings
+  echo "Done."
+}
+
+cmd_status() {
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+    echo "running (LaunchAgent $LABEL)"
+    launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -iE "state =|pid =" | sed 's/^/  /'
+  else
+    echo "not running"
+  fi
+}
+
+cmd_doctor() {
+  echo "app:        $(find_app || echo 'NOT FOUND')"
+  echo "hook:       $([ -f "$HOOK" ] && echo "$HOOK" || echo 'missing')"
+  echo "settings:   $(grep -q claude-menubar-hook.sh "$SETTINGS" 2>/dev/null && echo 'hooks wired' || echo 'not wired')"
+  echo "launchagent:$([ -f "$PLIST" ] && echo "$PLIST" || echo 'missing')"
+  echo "jq:         $(command -v jq >/dev/null 2>&1 && echo ok || echo 'MISSING (brew install jq)')"
+  echo -n "status:     "; cmd_status
+}
+
+case "${1:-help}" in
+  setup)   cmd_setup ;;
+  remove|uninstall) cmd_remove ;;
+  start)   write_plist; lc_start; echo "started" ;;
+  stop)    lc_stop; echo "stopped" ;;
+  restart) write_plist; lc_stop; lc_start; echo "restarted" ;;
+  status)  cmd_status ;;
+  doctor)  cmd_doctor ;;
+  *) cat <<USAGE
+claude-menubar — control the ClaudeMenuBar app
+
+  claude-menubar setup     wire status hooks + autostart, then start
+  claude-menubar remove    undo hooks + autostart (keeps the app)
+  claude-menubar start|stop|restart|status
+  claude-menubar doctor    show what's installed and where
+USAGE
+  ;;
+esac
