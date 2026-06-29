@@ -8,16 +8,25 @@ import AppKit
 /// The GUI app's own `claude://` scheme does NOT handle session resume.
 enum DeepLink {
     static func open(_ session: Session) {
-        log("CLICK open sid=\(session.id)")
-        let urlString = "claude://resume?session=\(session.id)"
-        // Try the most reliable launcher first; fall back to NSWorkspace.
-        if !runOpen([urlString]) {
-            if let u = URL(string: urlString) {
-                let ok = NSWorkspace.shared.open(u)
-                log("NSWorkspace.open=\(ok) \(urlString)")
-            }
+        log("CLICK open sid=\(session.id) entrypoint=\(session.entrypoint ?? "nil")")
+        if session.entrypoint == "claude-desktop" {
+            // Session lives inside Claude Desktop — just bring it to front.
+            // (claude://resume imports CLI sessions only; calling it on a
+            // desktop session yields "transcript not found".)
+            let app = URL(fileURLWithPath: "/Applications/Claude.app")
+            let ok = NSWorkspace.shared.open(app)
+            log("activated Claude.app ok=\(ok)")
         } else {
-            log("ran /usr/bin/open \(urlString)")
+            // CLI session — import into Claude Desktop via deep link.
+            let urlString = "claude://resume?session=\(session.id)"
+            if !runOpen([urlString]) {
+                if let u = URL(string: urlString) {
+                    let ok = NSWorkspace.shared.open(u)
+                    log("NSWorkspace.open=\(ok) \(urlString)")
+                }
+            } else {
+                log("ran /usr/bin/open \(urlString)")
+            }
         }
     }
 
