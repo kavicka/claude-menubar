@@ -120,6 +120,13 @@ final class SessionStore: ObservableObject {
             if let url = transcriptURL(for: id) {
                 if let mtime = mtime(of: url) { s.lastActivity = mtime }
                 s.title = title(for: id, url: url)
+            } else if s.state == .finished {
+                // Dead session with no transcript on disk: nothing to reopen.
+                // These are internal helper sessions (hooks fire for them too);
+                // drop the row and its stale status file.
+                try? fm.removeItem(at: statusDir.appendingPathComponent("\(id).json"))
+                map.removeValue(forKey: id)
+                continue
             }
             if s.title.isEmpty { s.title = s.projectName }
             map[id] = s

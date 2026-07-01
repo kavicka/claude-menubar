@@ -9,37 +9,43 @@ import AppKit
 enum DeepLink {
     static func open(_ session: Session) {
         log("CLICK open sid=\(session.id) entrypoint=\(session.entrypoint ?? "nil")")
-        if session.entrypoint == "claude-desktop" {
-            // Session lives inside Claude Desktop — just bring it to front.
-            // (claude://resume imports CLI sessions only; calling it on a
-            // desktop session yields "transcript not found".)
-            let app = URL(fileURLWithPath: "/Applications/Claude.app")
-            let ok = NSWorkspace.shared.open(app)
-            log("activated Claude.app ok=\(ok)")
-        } else {
-            // CLI session — import into Claude Desktop via deep link.
-            let urlString = "claude://resume?session=\(session.id)"
-            if !runOpen([urlString]) {
-                if let u = URL(string: urlString) {
-                    let ok = NSWorkspace.shared.open(u)
-                    log("NSWorkspace.open=\(ok) \(urlString)")
-                }
-            } else {
-                log("ran /usr/bin/open \(urlString)")
+        // Works for both desktop and CLI sessions as long as the transcript
+        // exists on disk (the store only lists sessions that have one).
+        let urlString = "claude://resume?session=\(session.id)"
+        if !runOpen([urlString]) {
+            if let u = URL(string: urlString) {
+                let ok = NSWorkspace.shared.open(u)
+                log("NSWorkspace.open=\(ok) \(urlString)")
             }
+        } else {
+            log("ran /usr/bin/open \(urlString)")
         }
     }
 
     /// Fallback: `claude --resume <id>` in a new Terminal window at the chat's cwd.
+    /// Uses a temporary .command file — needs no Automation (Apple events) permission.
     static func openInTerminal(_ session: Session) {
         log("CLICK terminal sid=\(session.id) cwd=\(session.cwd)")
-        let dir = session.cwd.isEmpty ? "$HOME" : session.cwd
-        let cmd = "cd \(shellQuote(dir)) && claude --resume \(session.id)"
-        let script = "tell application \"Terminal\" to do script \(appleScriptQuote(cmd))\n"
-            + "tell application \"Terminal\" to activate"
-        var error: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
-        if let error { log("terminal AppleScript error: \(error)") }
+        let dir = session.cwd.isEmpty ? NSHomeDirectory() : session.cwd
+        let script = """
+        #!/bin/zsh
+        cd \(shellQuote(dir)) || exit 1
+        exec claude --resume \(session.id)
+        """
+        let tmp = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/menubar/resume-\(session.id.prefix(8)).command")
+        do {
+            try script.data(using: .utf8)?.write(to: tmp, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmp.path)
+        } catch {
+            log("terminal: failed to write command file: \(error)")
+            return
+        }
+        let cfg = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open([tmp], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"),
+                                configuration: cfg) { _, err in
+            if let err { log("terminal open error: \(err)") }
+        }
     }
 
     // MARK: - Helpers
@@ -55,11 +61,6 @@ enum DeepLink {
 
     private static func shellQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private static func appleScriptQuote(_ s: String) -> String {
-        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
-                 .replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
     /// Append a line to ~/.claude/menubar/click.log (diagnostic).
