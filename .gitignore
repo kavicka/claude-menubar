@@ -2,3 +2,4 @@
 ClaudeMenuBar.app/
 *.xcodeproj
 .DS_Store
+.code-review-graph
