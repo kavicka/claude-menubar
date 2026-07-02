@@ -51,7 +51,17 @@ mkdir -p "$dir"
 input="$(cat)"
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+transcript="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
 [ -z "$sid" ] && exit 0
+# A "waiting" stop can actually be a turn that ended in an API error rather
+# than a normal completion. Claude Code marks those transcript lines with
+# isApiErrorMessage:true; a cheap tail-check is enough since it's always
+# near the end of the file, not a full-file scan.
+if [ "$state" = "waiting" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
+  if tail -n 20 "$transcript" 2>/dev/null | grep -q '"isApiErrorMessage":true'; then
+    state="error"
+  fi
+fi
 ts="$(date +%s)"
 out="$dir/$sid.json"; tmp="$out.tmp.$$"
 jq -nc --arg sid "$sid" --arg state "$state" --arg cwd "$cwd" --argjson ts "$ts" \

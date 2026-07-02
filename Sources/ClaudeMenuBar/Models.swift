@@ -4,22 +4,25 @@ import Foundation
 enum SessionState: String, Codable {
     case running   // 🟠 Claude is actively working
     case waiting   // 🟡 idle, waiting for the user's next step
+    case error     // 🔴 last turn ended in an API error
     case finished  // 🟢 process gone / session ended
 
     var dotColorName: String {
         switch self {
         case .running:  return "orange"
         case .waiting:  return "yellow"
+        case .error:    return "red"
         case .finished: return "green"
         }
     }
 
-    /// Sort priority: running first, then waiting, then finished.
+    /// Sort priority: running first, then waiting, then error, then finished.
     var order: Int {
         switch self {
         case .running:  return 0
         case .waiting:  return 1
-        case .finished: return 2
+        case .error:    return 2
+        case .finished: return 3
         }
     }
 }

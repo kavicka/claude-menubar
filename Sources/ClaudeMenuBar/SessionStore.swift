@@ -112,7 +112,7 @@ final class SessionStore: ObservableObject {
         //    live process owns it; while live, trust the hook (waiting vs running).
         for (id, var s) in map {
             if liveSids.contains(id) {
-                s.state = (s.state == .waiting) ? .waiting : .running
+                s.state = (s.state == .waiting || s.state == .error) ? s.state : .running
             } else {
                 s.state = .finished
             }
@@ -165,10 +165,12 @@ final class SessionStore: ObservableObject {
     private func computeBarText(_ s: [Session]) -> String {
         let r = s.filter { $0.state == .running }.count
         let w = s.filter { $0.state == .waiting }.count
+        let e = s.filter { $0.state == .error }.count
         let f = s.filter { $0.state == .finished }.count
         var parts: [String] = []
         if r > 0 { parts.append("🟠\(r)") }
         if w > 0 { parts.append("🟡\(w)") }
+        if e > 0 { parts.append("🔴\(e)") }
         if f > 0 { parts.append("🟢\(f)") }
         return parts.isEmpty ? "○" : parts.joined(separator: " ")
     }

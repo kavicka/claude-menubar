@@ -124,6 +124,7 @@ struct MenuContentView: View {
         switch state {
         case .running:  return .orange
         case .waiting:  return .yellow
+        case .error:    return .red
         case .finished: return .green
         }
     }

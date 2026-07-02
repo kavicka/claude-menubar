@@ -37,7 +37,10 @@ struct ClaudeMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(store: store)
         } label: {
-            Text(store.barText)
+            HStack(spacing: 4) {
+                ClaudeGlyph()
+                Text(store.barText)
+            }
         }
         .menuBarExtraStyle(.window)
     }
